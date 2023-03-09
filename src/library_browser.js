@@ -804,6 +804,7 @@ var LibraryBrowser = {
   },
 
   emscripten_run_preload_plugins_data__proxy: 'sync',
+  emscripten_run_preload_plugins_data__deps: ['malloc'],
   emscripten_run_preload_plugins_data__sig: 'viiiiii',
   emscripten_run_preload_plugins_data: function(data, size, suffix, arg, onload, onerror) {
     {{{ runtimeKeepalivePush() }}}
@@ -845,7 +846,7 @@ var LibraryBrowser = {
     onload = {{{ makeDynCall('v', 'onload') }}};
     onerror = {{{ makeDynCall('v', 'onerror') }}};
 
-#if USE_PTHREADS
+#if PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) {
       err('emscripten_async_load_script("' + UTF8ToString(url) + '") failed, emscripten_async_load_script is currently not available in pthreads!');
       return onerror ? onerror() : undefined;
@@ -1048,7 +1049,7 @@ var LibraryBrowser = {
       GL.newRenderingFrameStarted();
 #endif
 
-#if USE_PTHREADS && OFFSCREEN_FRAMEBUFFER && GL_SUPPORT_EXPLICIT_SWAP_CONTROL
+#if PTHREADS && OFFSCREEN_FRAMEBUFFER && GL_SUPPORT_EXPLICIT_SWAP_CONTROL
       // If the current GL context is a proxied regular WebGL context, and was initialized with implicit swap mode on the main thread, and we are on the parent thread,
       // perform the swap on behalf of the user.
       if (typeof GL != 'undefined' && GL.currentContext && GL.currentContextIsProxied) {
@@ -1355,7 +1356,7 @@ var LibraryBrowser = {
     return info.awaited;
   },
 
-  emscripten_get_preloaded_image_data__deps: ['$PATH_FS'],
+  emscripten_get_preloaded_image_data__deps: ['$PATH_FS', 'malloc'],
   emscripten_get_preloaded_image_data__proxy: 'sync',
   emscripten_get_preloaded_image_data__sig: 'iiii',
   emscripten_get_preloaded_image_data: function(path, w, h) {

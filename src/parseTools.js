@@ -260,12 +260,12 @@ function indentify(text, indent) {
 // Correction tools
 
 function getHeapOffset(offset, type) {
-  if (!WASM_BIGINT && Runtime.getNativeFieldSize(type) > 4 && type == 'i64') {
+  if (!WASM_BIGINT && getNativeFieldSize(type) > 4 && type == 'i64') {
     // we emulate 64-bit integer values as 32 in asmjs-unknown-emscripten, but not double
     type = 'i32';
   }
 
-  const sz = Runtime.getNativeTypeSize(type);
+  const sz = getNativeTypeSize(type);
   const shifts = Math.log(sz) / Math.LN2;
   return `((${offset})>>${shifts})`;
 }
@@ -371,7 +371,7 @@ function makeSetValue(ptr, pos, value, type, noNeedFirst, ignore, align, sep = '
     // bits, so HEAP64[ptr>>3] might be broken.
     return '(tempI64 = [' + splitI64(value) + '],' +
             makeSetValue(ptr, pos, 'tempI64[0]', 'i32', noNeedFirst, ignore, align, ',') + ',' +
-            makeSetValue(ptr, getFastValue(pos, '+', Runtime.getNativeTypeSize('i32')), 'tempI64[1]', 'i32', noNeedFirst, ignore, align, ',') + ')';
+            makeSetValue(ptr, getFastValue(pos, '+', getNativeTypeSize('i32')), 'tempI64[1]', 'i32', noNeedFirst, ignore, align, ',') + ')';
   }
 
   const offset = calcFastOffset(ptr, pos);
@@ -488,14 +488,18 @@ function makeReturn64(value) {
   return `(setTempRet0(${pair[1]}), ${pair[0]})`;
 }
 
-function makeThrow(what) {
+function makeThrow(excPtr) {
   if (ASSERTIONS && DISABLE_EXCEPTION_CATCHING) {
-    what += ' + " - Exception catching is disabled, this exception cannot be caught. Compile with -sNO_DISABLE_EXCEPTION_CATCHING or -sEXCEPTION_CATCHING_ALLOWED=[..] to catch."';
+    excPtr += ' + " - Exception catching is disabled, this exception cannot be caught. Compile with -sNO_DISABLE_EXCEPTION_CATCHING or -sEXCEPTION_CATCHING_ALLOWED=[..] to catch."';
     if (MAIN_MODULE) {
-      what += ' + " (note: in dynamic linking, if a side module wants exceptions, the main module must be built with that support)"';
+      excPtr += ' + " (note: in dynamic linking, if a side module wants exceptions, the main module must be built with that support)"';
     }
+    return `throw ${excPtr};`;
   }
-  return `throw ${what};`;
+  if (EXCEPTION_STACK_TRACES) {
+    return `throw new CppException(${excPtr});`;
+  }
+  return `throw ${excPtr};`;
 }
 
 function charCode(char) {
@@ -701,11 +705,11 @@ function modifyFunction(text, func) {
 }
 
 function runIfMainThread(text) {
-  if (WASM_WORKERS && USE_PTHREADS) {
+  if (WASM_WORKERS && PTHREADS) {
     return 'if (!ENVIRONMENT_IS_WASM_WORKER && !ENVIRONMENT_IS_PTHREAD) { ' + text + ' }';
   } else if (WASM_WORKERS) {
     return 'if (!ENVIRONMENT_IS_WASM_WORKER) { ' + text + ' }';
-  } else if (USE_PTHREADS) {
+  } else if (PTHREADS) {
     return 'if (!ENVIRONMENT_IS_PTHREAD) { ' + text + ' }';
   } else {
     return text;
@@ -932,7 +936,7 @@ function makeMalloc(source, param) {
 // We skip this completely in MINIMAL_RUNTIME and also in builds that
 // don't ever need to exit the runtime.
 function runtimeKeepalivePush() {
-  if (MINIMAL_RUNTIME || (EXIT_RUNTIME == 0 && USE_PTHREADS == 0)) return '';
+  if (MINIMAL_RUNTIME || (EXIT_RUNTIME == 0 && PTHREADS == 0)) return '';
   return 'runtimeKeepalivePush();';
 }
 
@@ -941,7 +945,7 @@ function runtimeKeepalivePush() {
 // We skip this completely in MINIMAL_RUNTIME and also in builds that
 // don't ever need to exit the runtime.
 function runtimeKeepalivePop() {
-  if (MINIMAL_RUNTIME || (EXIT_RUNTIME == 0 && USE_PTHREADS == 0)) return '';
+  if (MINIMAL_RUNTIME || (EXIT_RUNTIME == 0 && PTHREADS == 0)) return '';
   return 'runtimeKeepalivePop();';
 }
 
@@ -990,4 +994,11 @@ function preJS() {
     result += preprocess(fileName);
   }
   return result;
+}
+
+function formattedMinNodeVersion() {
+  var major = MIN_NODE_VERSION / 10000
+  var minor = (MIN_NODE_VERSION / 100) % 100
+  var rev = MIN_NODE_VERSION % 100
+  return `v${major}.${minor}.${rev}`;
 }

@@ -193,19 +193,16 @@ var runtimeInitialized = false;
 
 #if EXIT_RUNTIME
 var runtimeExited = false;
+#endif
+
 var runtimeKeepaliveCounter = 0;
 
 function keepRuntimeAlive() {
   return noExitRuntime || runtimeKeepaliveCounter > 0;
 }
-#else
-function keepRuntimeAlive() {
-  return noExitRuntime;
-}
-#endif
 
 function preRun() {
-#if ASSERTIONS && USE_PTHREADS
+#if ASSERTIONS && PTHREADS
   assert(!ENVIRONMENT_IS_PTHREAD); // PThreads reuse the runtime from the main thread.
 #endif
 #if expectToReceiveOnModule('preRun')
@@ -229,7 +226,7 @@ function initRuntime() {
   if (ENVIRONMENT_IS_WASM_WORKER) return __wasm_worker_initializeRuntime();
 #endif
 
-#if USE_PTHREADS
+#if PTHREADS
   if (ENVIRONMENT_IS_PTHREAD) return;
 #endif
 
@@ -255,7 +252,7 @@ function preMain() {
 #if STACK_OVERFLOW_CHECK
   checkStackCookie();
 #endif
-#if USE_PTHREADS
+#if PTHREADS
   if (ENVIRONMENT_IS_PTHREAD) return; // PThreads reuse the runtime from the main thread.
 #endif
   <<< ATMAINS >>>
@@ -268,6 +265,9 @@ function exitRuntime() {
 #if RUNTIME_DEBUG
   dbg('exitRuntime');
 #endif
+#if ASSERTIONS
+  assert(!runtimeExited);
+#endif
 #if ASYNCIFY == 1 && ASSERTIONS
   // ASYNCIFY cannot be used once the runtime starts shutting down.
   Asyncify.state = Asyncify.State.Disabled;
@@ -275,7 +275,7 @@ function exitRuntime() {
 #if STACK_OVERFLOW_CHECK
   checkStackCookie();
 #endif
-#if USE_PTHREADS
+#if PTHREADS
   if (ENVIRONMENT_IS_PTHREAD) return; // PThreads reuse the runtime from the main thread.
 #endif
 #if !STANDALONE_WASM
@@ -283,7 +283,7 @@ function exitRuntime() {
 #endif
   callRuntimeCallbacks(__ATEXIT__);
   <<< ATEXITS >>>
-#if USE_PTHREADS
+#if PTHREADS
   PThread.terminateAllThreads();
 #endif
   runtimeExited = true;
@@ -294,7 +294,7 @@ function postRun() {
 #if STACK_OVERFLOW_CHECK
   checkStackCookie();
 #endif
-#if USE_PTHREADS
+#if PTHREADS
   if (ENVIRONMENT_IS_PTHREAD) return; // PThreads reuse the runtime from the main thread.
 #endif
 
@@ -543,6 +543,8 @@ function createExportWrapper(name, fixedasm) {
 }
 #endif
 
+#include "runtime_exceptions.js"
+
 #if ABORT_ON_WASM_EXCEPTIONS
 // `abortWrapperDepth` counts the recursion level of the wrapper function so
 // that we only handle exceptions at the top level letting the exception
@@ -566,9 +568,14 @@ function makeAbortWrapper(original) {
       if (
         ABORT // rethrow exception if abort() was called in the original function call above
         || abortWrapperDepth > 1 // rethrow exceptions not caught at the top level if exception catching is enabled; rethrow from exceptions from within callMain
-#if SUPPORT_LONGJMP == 'emscripten'
-        || e === Infinity // rethrow longjmp if enabled (In Emscripten EH format longjmp will throw Infinity)
+#if SUPPORT_LONGJMP == 'emscripten' // Rethrow longjmp if enabled
+#if EXCEPTION_STACK_TRACES
+        || e instanceof EmscriptenSjLj // EXCEPTION_STACK_TRACES=1 will throw an instance of EmscriptenSjLj
+#else
+        || e === Infinity // EXCEPTION_STACK_TRACES=0 will throw Infinity
+#endif // EXCEPTION_STACK_TRACES
 #endif
+        || e === 'unwind'
       ) {
         throw e;
       }
@@ -984,7 +991,7 @@ function createWasm() {
 
     Module['asm'] = exports;
 
-#if USE_PTHREADS
+#if PTHREADS
 #if MAIN_MODULE
     registerTLSInit(Module['asm']['_emscripten_tls_init'], instance.exports, metadata);
 #else
@@ -1039,16 +1046,16 @@ function createWasm() {
     exportAsmFunctions(exports);
 #endif
 
-#if USE_PTHREADS || WASM_WORKERS
+#if PTHREADS || WASM_WORKERS
     // We now have the Wasm module loaded up, keep a reference to the compiled module so we can post it to the workers.
     wasmModule = module;
 #endif
 
-#if USE_PTHREADS
+#if PTHREADS
     PThread.loadWasmModuleToAllWorkers(() => removeRunDependency('wasm-instantiate'));
 #else // singlethreaded build:
     removeRunDependency('wasm-instantiate');
-#endif // ~USE_PTHREADS
+#endif // ~PTHREADS
 
     return exports;
   }
@@ -1078,7 +1085,7 @@ function createWasm() {
     receiveInstance(result['instance'], result['module']);
 #else
     // TODO: Due to Closure regression https://github.com/google/closure-compiler/issues/3193, the above line no longer optimizes out down to the following line.
-    // When the regression is fixed, can restore the above USE_PTHREADS-enabled path.
+    // When the regression is fixed, can restore the above PTHREADS-enabled path.
     receiveInstance(result['instance']);
 #endif
   }
@@ -1091,7 +1098,7 @@ function createWasm() {
   // Also pthreads and wasm workers initialize the wasm instance through this path.
   if (Module['instantiateWasm']) {
 #if USE_OFFSET_CONVERTER
-#if ASSERTIONS && USE_PTHREADS
+#if ASSERTIONS && PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) {
       assert(Module['wasmOffsetData'], 'wasmOffsetData not found on Module object');
     }
@@ -1099,7 +1106,7 @@ function createWasm() {
     wasmOffsetConverter = resetPrototype(WasmOffsetConverter, Module['wasmOffsetData']);
 #endif
 #if LOAD_SOURCE_MAP
-#if ASSERTIONS && USE_PTHREADS
+#if ASSERTIONS && PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) {
       assert(Module['wasmSourceMapData'], 'wasmSourceMapData not found on Module object');
     }
@@ -1136,7 +1143,7 @@ function createWasm() {
   return {}; // no exports yet; we'll fill them in later
 #else
   var result = instantiateSync(wasmBinaryFile, info);
-#if USE_PTHREADS || MAIN_MODULE
+#if PTHREADS || MAIN_MODULE
   return receiveInstance(result[0], result[1]);
 #else
   // TODO: Due to Closure regression https://github.com/google/closure-compiler/issues/3193,
@@ -1166,7 +1173,7 @@ function getCompilerSetting(name) {
 var memoryInitializer = <<< MEM_INITIALIZER >>>;
 
 function runMemoryInitializer() {
-#if USE_PTHREADS
+#if PTHREADS
   if (ENVIRONMENT_IS_PTHREAD) return;
 #endif
   if (!isDataURI(memoryInitializer)) {

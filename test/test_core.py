@@ -39,7 +39,7 @@ logger = logging.getLogger("test_core")
 def wasm_simd(f):
   @wraps(f)
   def decorated(self, *args, **kwargs):
-    self.require_v8()
+    self.require_simd()
     if self.get_setting('MEMORY64') == 2:
       self.skipTest('https://github.com/WebAssembly/binaryen/issues/4638')
     if not self.is_wasm():
@@ -1627,6 +1627,7 @@ int main(int argc, char **argv) {
   @no_wasm64('MEMORY64 does not yet support exceptions')
   @with_both_eh_sjlj
   def test_EXPORT_EXCEPTION_HANDLING_HELPERS(self):
+    self.set_setting('ASSERTIONS', 0)
     self.set_setting('EXPORT_EXCEPTION_HANDLING_HELPERS')
     # FIXME Temporary workaround. See 'FIXME' in the test source code below for
     # details.
@@ -2327,8 +2328,8 @@ int main(int argc, char **argv) {
 
   @parameterized({
     '': ([], False),
-    'pthreads': (['-sUSE_PTHREADS', '-sPROXY_TO_PTHREAD', '-sEXIT_RUNTIME'], False),
-    'pthreads_dylink': (['-sUSE_PTHREADS', '-sPROXY_TO_PTHREAD', '-sEXIT_RUNTIME', '-sMAIN_MODULE=2', '-Wno-experimental'], False),
+    'pthreads': (['-pthread', '-sPROXY_TO_PTHREAD', '-sEXIT_RUNTIME'], False),
+    'pthreads_dylink': (['-pthread', '-sPROXY_TO_PTHREAD', '-sEXIT_RUNTIME', '-sMAIN_MODULE=2', '-Wno-experimental'], False),
     'c': ([], True),
     'dylink': (['-sMAIN_MODULE=2'], False),
     'dylink_c': (['-sMAIN_MODULE=2'], True),
@@ -2339,7 +2340,7 @@ int main(int argc, char **argv) {
     else:
       self.emcc_args += ['-sEXPORTED_FUNCTIONS=_main,_malloc']
     self.emcc_args += args
-    if '-sUSE_PTHREADS' in args:
+    if '-pthread' in args:
       self.setup_node_pthreads()
 
     self.do_core_test('test_em_js.cpp', force_c=force_c)
@@ -2811,7 +2812,6 @@ The current type of b is: 9
   def test_pthread_proxying(self, modularize):
     if modularize and self.get_setting('WASM') == 0:
       self.skipTest('MODULARIZE + WASM=0 + pthreads does not work (#16794)')
-    self.set_setting('EXIT_RUNTIME')
     self.set_setting('PROXY_TO_PTHREAD')
     self.set_setting('INITIAL_MEMORY=32mb')
     args = []
@@ -2827,7 +2827,6 @@ The current type of b is: 9
 
   @node_pthreads
   def test_pthread_proxying_cpp(self):
-    self.set_setting('EXIT_RUNTIME')
     self.set_setting('PROXY_TO_PTHREAD')
     self.set_setting('INITIAL_MEMORY=32mb')
     self.do_run_in_out_file_test('pthread/test_pthread_proxying_cpp.cpp',
@@ -2837,6 +2836,13 @@ The current type of b is: 9
   def test_pthread_proxying_dropped_work(self):
     self.set_setting('PTHREAD_POOL_SIZE=2')
     self.do_run_in_out_file_test('pthread/test_pthread_proxying_dropped_work.c')
+
+  @node_pthreads
+  def test_pthread_proxying_canceled_work(self):
+    self.set_setting('PROXY_TO_PTHREAD')
+    self.do_run_in_out_file_test(
+        'pthread/test_pthread_proxying_canceled_work.c',
+        interleaved_output=False)
 
   @node_pthreads
   def test_pthread_proxying_refcount(self):
@@ -4221,11 +4227,6 @@ ok
       self.skipTest('MEMORY64=2 always requires module re-writing')
     self.set_setting('WASM_BIGINT')
     self.set_setting('ERROR_ON_WASM_CHANGES_AFTER_LINK')
-    self.do_basic_dylink_test()
-
-  @needs_dylink
-  def test_dylink_basics_no_lld_report_undefined(self):
-    self.set_setting('LLD_REPORT_UNDEFINED', 0)
     self.do_basic_dylink_test()
 
   @needs_dylink
@@ -6310,7 +6311,6 @@ PORT: 3979
     # the wasm backend has lock-free atomics, but not asm.js or asm2wasm
     self.emcc_args += ['-DIS_64BIT_LOCK_FREE=1']
     self.do_core_test('test_atomic_cxx.cpp')
-    # TODO: test with USE_PTHREADS in wasm backend as well
 
   def test_phiundef(self):
     self.do_core_test('test_phiundef.c')
@@ -6873,7 +6873,7 @@ void* operator new(size_t size) {
   })
   def test_sqlite(self, use_pthreads):
     if use_pthreads:
-      self.set_setting('USE_PTHREADS')
+      self.emcc_args.append('-pthread')
       self.setup_node_pthreads()
     self.emcc_args += ['-sUSE_SQLITE3']
     self.do_run_in_out_file_test(test_file('sqlite/benchmark.c'))
@@ -6904,7 +6904,6 @@ void* operator new(size_t size) {
 
   @needs_make('make')
   @is_slow_test
-  @no_wasm64('TODO produces different output')
   @no_ubsan('it seems that bullet contains UB')
   @parameterized({
     'cmake': (True,),
@@ -6916,12 +6915,13 @@ void* operator new(size_t size) {
       self.skipTest("Windows cannot run configure sh scripts")
 
     self.emcc_args += [
-        '-Wno-c++11-narrowing',
-        '-Wno-deprecated-register',
-        '-Wno-writable-strings',
-        '-Wno-shift-negative-value',
-        '-Wno-format',
-        '-Wno-bitfield-constant-conversion',
+      '-Wno-c++11-narrowing',
+      '-Wno-deprecated-register',
+      '-Wno-writable-strings',
+      '-Wno-shift-negative-value',
+      '-Wno-format',
+      '-Wno-bitfield-constant-conversion',
+      '-Wno-int-to-void-pointer-cast',
     ]
 
     # extra testing for ASSERTIONS == 2
@@ -7047,9 +7047,6 @@ void* operator new(size_t size) {
 
         return output
 
-      # Explicitly disable EXIT_RUNTIME, since otherwise addOnPostRun does not work.
-      # https://github.com/emscripten-core/emscripten/issues/15080
-      self.set_setting('EXIT_RUNTIME', 0)
       self.emcc_args += ['--minify=0'] # to compare the versions
       self.emcc_args += ['--pre-js', 'pre.js']
 
@@ -7807,7 +7804,7 @@ void* operator new(size_t size) {
     self.set_setting('WASM_ASYNC_COMPILATION', 0)
     self.set_setting('PTHREAD_POOL_DELAY_LOAD', 1)
     self.set_setting('PTHREAD_POOL_SIZE', 1)
-    self.emcc_args += ['--bind', '--post-js=' + test_file('core/pthread/test_embind_sync_if_pthread_delayed.post.js')]
+    self.emcc_args += ['-lembind', '--post-js=' + test_file('core/pthread/test_embind_sync_if_pthread_delayed.post.js')]
     self.do_run_in_out_file_test(test_file('core/pthread/test_embind_sync_if_pthread_delayed.cpp'))
 
   ### Tests for tools
@@ -8708,7 +8705,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
 
   @node_pthreads
   def test_binaryen_2170_emscripten_atomic_cas_u8(self):
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args.append('-pthread')
     self.do_run_in_out_file_test('binaryen_2170_emscripten_atomic_cas_u8.cpp')
 
   @also_with_standalone_wasm()
@@ -8771,21 +8768,26 @@ NODEFS is no longer included by default; build with -lnodefs.js
   def test_postrun_exception(self):
     # verify that an exception thrown in postRun() will not trigger the
     # compilation failed handler, and will be printed to stderr.
-    # Explicitly disable EXIT_RUNTIME, since otherwise addOnPostRun does not work.
-    # https://github.com/emscripten-core/emscripten/issues/15080
-    self.set_setting('EXIT_RUNTIME', 0)
     self.add_post_run('ThisFunctionDoesNotExist()')
     self.build(test_file('core/test_hello_world.c'))
     output = self.run_js('test_hello_world.js', assert_returncode=NON_ZERO)
     self.assertStartswith(output, 'hello, world!')
     self.assertContained('ThisFunctionDoesNotExist is not defined', output)
 
+  def test_postrun_exit_runtime(self):
+    create_file('post.js', '''
+      addOnPostRun(() => err('post run\\n'));
+    ''')
+    self.set_setting('EXIT_RUNTIME')
+    self.emcc_args.append('--post-js=post.js')
+    self.do_runf(test_file('hello_world.c'), 'post run')
+
   # Tests that building with -sDECLARE_ASM_MODULE_EXPORTS=0 works
   def test_no_declare_asm_module_exports(self):
     self.set_setting('DECLARE_ASM_MODULE_EXPORTS', 0)
     self.set_setting('WASM_ASYNC_COMPILATION', 0)
     self.maybe_closure()
-    self.do_runf(test_file('declare_asm_module_exports.cpp'), 'jsFunction: 1')
+    self.do_runf(test_file('declare_asm_module_exports.c'), 'jsFunction: 1')
     js = read_file('declare_asm_module_exports.js')
     occurances = js.count('cFunction')
     if self.is_optimizing() and '-g' not in self.emcc_args:
@@ -8807,7 +8809,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
     self.maybe_closure()
     self.set_setting('MINIMAL_RUNTIME')
     self.emcc_args += ['--pre-js', test_file('minimal_runtime_exit_handling.js')]
-    self.do_runf(test_file('declare_asm_module_exports.cpp'), 'jsFunction: 1')
+    self.do_runf(test_file('declare_asm_module_exports.c'), 'jsFunction: 1')
 
   # Tests that -sMINIMAL_RUNTIME works well in different build modes
   @no_wasmfs('https://github.com/emscripten-core/emscripten/issues/16816')
@@ -9154,7 +9156,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
     self.set_setting('STACK_OVERFLOW_CHECK', 2)
     self.set_setting('STACK_SIZE', 65536)
     self.set_setting('PROXY_TO_PTHREAD')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args.append('-pthread')
     if self.is_optimizing():
       expected = ['Aborted(stack overflow']
     else:
@@ -9299,6 +9301,10 @@ NODEFS is no longer included by default; build with -lnodefs.js
     self.do_run_in_out_file_test('core/pthread/test_pthread_exit_runtime.c', assert_returncode=42)
 
   @node_pthreads
+  def test_pthread_keepalive(self):
+    self.do_run_in_out_file_test('core/pthread/test_pthread_keepalive.c')
+
+  @node_pthreads
   def test_pthread_exit_main(self):
     self.do_run_in_out_file_test('core/pthread/test_pthread_exit_main.c')
 
@@ -9343,13 +9349,14 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @no_asan('incompatibility with atomics')
   @node_pthreads
   def test_emscripten_atomics(self):
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args.append('-pthread')
     self.do_run_in_out_file_test('core/pthread/emscripten_atomics.c')
 
   @no_asan('incompatibility with atomics')
   @node_pthreads
   def test_emscripten_futexes(self):
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args.append('-pthread')
+    self.emcc_args += ['-Wno-nonnull'] # This test explicitly checks behavior of passing NULL to emscripten_futex_wake().
     self.do_run_in_out_file_test('core/pthread/emscripten_futexes.c')
 
   @node_pthreads
@@ -9368,8 +9375,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @needs_dylink
   @node_pthreads
   def test_pthread_dylink(self):
-    self.emcc_args.append('-Wno-experimental')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.set_setting('PTHREAD_POOL_SIZE', 2)
     main = test_file('core/pthread/test_pthread_dylink.c')
 
@@ -9388,8 +9394,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @needs_dylink
   @node_pthreads
   def test_pthread_dylink_entry_point(self, args):
-    self.emcc_args.append('-Wno-experimental')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.set_setting('PTHREAD_POOL_SIZE', 1)
     main = test_file('core/pthread/test_pthread_dylink_entry_point.c')
     self.dylink_testf(main, need_reverse=False, emcc_args=args)
@@ -9398,16 +9403,14 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @node_pthreads
   @no_wasm64('MEMORY64 does not yet support exceptions')
   def test_pthread_dylink_exceptions(self):
-    self.emcc_args.append('-Wno-experimental')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.emcc_args.append('-fexceptions')
     self.dylink_testf(test_file('core/pthread/test_pthread_dylink_exceptions.cpp'))
 
   @needs_dylink
   @node_pthreads
   def test_pthread_dlopen(self):
-    self.set_setting('USE_PTHREADS')
-    self.emcc_args.append('-Wno-experimental')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.build_dlfcn_lib(test_file('core/pthread/test_pthread_dlopen_side.c'))
 
     self.prep_dlfcn_main()
@@ -9419,10 +9422,10 @@ NODEFS is no longer included by default; build with -lnodefs.js
 
   @needs_dylink
   @node_pthreads
+  @disabled('https://github.com/emscripten-core/emscripten/issues/18887')
   def test_pthread_dlopen_many(self):
     nthreads = 10
-    self.set_setting('USE_PTHREADS')
-    self.emcc_args.append('-Wno-experimental')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.build_dlfcn_lib(test_file('core/pthread/test_pthread_dlopen_side.c'))
     for i in range(nthreads):
       shutil.copyfile('liblib.so', f'liblib{i}.so')
@@ -9448,8 +9451,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @needs_dylink
   @node_pthreads
   def test_pthread_dlsym(self):
-    self.set_setting('USE_PTHREADS')
-    self.emcc_args.append('-Wno-experimental')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.build_dlfcn_lib(test_file('core/pthread/test_pthread_dlsym_side.c'))
 
     self.prep_dlfcn_main()
@@ -9460,8 +9462,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @needs_dylink
   @node_pthreads
   def test_pthread_dylink_tls(self):
-    self.emcc_args.append('-Wno-experimental')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.set_setting('PTHREAD_POOL_SIZE', 1)
     main = test_file('core/pthread/test_pthread_dylink_tls.c')
     self.dylink_testf(main, need_reverse=False)
@@ -9469,8 +9470,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @needs_dylink
   @node_pthreads
   def test_pthread_dylink_longjmp(self):
-    self.emcc_args.append('-Wno-experimental')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.set_setting('PTHREAD_POOL_SIZE=1')
     main = test_file('core/pthread/test_pthread_dylink_longjmp.c')
     self.dylink_testf(main, need_reverse=False)
@@ -9478,8 +9478,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
   @needs_dylink
   @node_pthreads
   def test_pthread_dylink_main_module_1(self):
-    self.emcc_args.append('-Wno-experimental')
-    self.set_setting('USE_PTHREADS')
+    self.emcc_args += ['-Wno-experimental', '-pthread']
     self.set_setting('MAIN_MODULE')
     self.do_runf(test_file('hello_world.c'))
 
@@ -9605,11 +9604,7 @@ NODEFS is no longer included by default; build with -lnodefs.js
     self.do_core_test('test_stack_get_free.c')
 
   # Tests settings.ABORT_ON_WASM_EXCEPTIONS
-  @no_wasm64('missing "crashing"')
   def test_abort_on_exceptions(self):
-    # Explicitly disable EXIT_RUNTIME, since otherwise addOnPostRun does not work.
-    # https://github.com/emscripten-core/emscripten/issues/15080
-    self.set_setting('EXIT_RUNTIME', 0)
     self.set_setting('ABORT_ON_WASM_EXCEPTIONS')
     self.set_setting('ALLOW_TABLE_GROWTH')
     self.set_setting('EXPORTED_RUNTIME_METHODS', ['ccall', 'cwrap'])

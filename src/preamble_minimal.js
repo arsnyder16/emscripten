@@ -94,7 +94,7 @@ function updateMemoryViews() {
 }
 
 #if IMPORTED_MEMORY
-#if USE_PTHREADS
+#if PTHREADS
 if (!ENVIRONMENT_IS_PTHREAD) {
 #endif
   wasmMemory =
@@ -110,14 +110,14 @@ if (!ENVIRONMENT_IS_PTHREAD) {
     , 'shared': true
 #endif
     });
-#if USE_PTHREADS
+#if PTHREADS
 }
 #if MODULARIZE
 else {
   wasmMemory = Module['wasmMemory'];
 }
 #endif // MODULARIZE
-#endif // USE_PTHREADS
+#endif // PTHREADS
 
 updateMemoryViews();
 #endif // IMPORTED_MEMORY
@@ -146,6 +146,7 @@ var runtimeInitialized = false;
 
 #include "runtime_math.js"
 #include "memoryprofiler.js"
+#include "runtime_exceptions.js"
 #include "runtime_debug.js"
 
 // === Body ===
